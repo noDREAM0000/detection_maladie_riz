@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tableau de bord riz</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+:root{--bg:#f6f7f4;--card:#fff;--txt:#1d2a1f;--mut:#667;--acc:#2e7d32;--bd:#dde}
+body{margin:0;font-family:system-ui,sans-serif;background:var(--bg);color:var(--txt)}
+header{background:var(--acc);color:#fff;padding:14px 20px}header h1{margin:0;font-size:1.3rem}
+main{max-width:1100px;margin:auto;padding:16px;display:grid;gap:16px;grid-template-columns:1fr 1fr}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:16px}
+.full{grid-column:1/-1}@media(max-width:800px){main{grid-template-columns:1fr}}
+label{display:block;margin:6px 0 2px;font-size:.9rem;color:var(--mut)}input{width:100%;box-sizing:border-box;padding:6px}
+button{margin-top:10px;background:var(--acc);color:#fff;border:0;padding:8px 16px;border-radius:6px;cursor:pointer}
+img{max-width:100%;border-radius:6px}.big{font-size:2.2rem;font-weight:700}
+table{width:100%;border-collapse:collapse;font-size:.9rem}td,th{border-bottom:1px solid var(--bd);padding:5px;text-align:left}
+.bar{height:14px;border-radius:3px;display:inline-block;vertical-align:middle}#map{height:320px}
+.warn{font-size:.85rem;color:#a15c00}
+</style></head><body>
+<header><h1>Détection des maladies du riz — tableau de bord</h1></header>
+<main>
+<section class="card"><h2>Nouvelle analyse</h2>
+<form id="f"><label>Image (feuille ou parcelle)</label><input type="file" name="file" accept="image/*" required>
+<label>Culture</label><select name="culture"><option value="riz">Riz</option><option value="manioc">Manioc</option></select>
+<label>Parcelle</label><input name="parcelle" value="Parcelle demo">
+<label>Tuiles sur le petit côté (1 = image entière)</label><input name="tuiles" type="number" value="4" min="1" max="12">
+<label>Latitude (optionnel)</label><input name="lat" placeholder="-18.91">
+<label>Longitude (optionnel)</label><input name="lon" placeholder="47.52">
+<button>Analyser</button></form></section>
+<section class="card"><h2>Résultat</h2><div id="res">Aucune analyse.</div></section>
+<section class="card full"><h2>Carte des zones (analyses géolocalisées)</h2><div id="map"></div></section>
+<section class="card full"><h2>Historique</h2><div id="hist"></div></section>
+</main>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const COUL={"Saine":"#3caa50","Pyriculariose":"#dc2828","BLB":"#ffa000","Brunissure":"#965a28","Incertaine":"#969696","Bactériose (CBB)":"#ffc800","Striure brune (CBSD)":"#783c1e","Acarien vert (CGM)":"#0078c8","Mosaïque (CMD)":"#b428b4"};
+let map=null,couche=null;
+try{map=L.map('map').setView([-18.91,47.52],6);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap'}).addTo(map);}catch(e){document.getElementById('map').textContent='Carte indisponible (pas d’accès Internet).';}
+function barres(s){return Object.entries(s).map(([c,v])=>`<div>${c} <span class="bar" style="width:${v*2}px;background:${COUL[c]}"></span> ${v} %</div>`).join('');}
+async function montrerGeo(id){if(!map)return;const r=await fetch(`/analyses/${id}/geojson`);if(!r.ok)return;
+const g=await r.json();if(couche)map.removeLayer(couche);
+couche=L.geoJSON(g,{style:f=>({color:COUL[f.properties.classe],fillOpacity:.5,weight:1})}).bindPopup(l=>l.feature.properties.classe+' ('+l.feature.properties.confiance+')').addTo(map);
+map.fitBounds(couche.getBounds());}
+async function hist(){const r=await fetch('/analyses?limite=100');const d=await r.json();const t=(await (await fetch('/analyses/compte')).json()).total;
+document.getElementById('hist').innerHTML=d.length?`<p>${t} analyses au total — les ${d.length} plus récentes, la plus récente en haut.</p><table><tr><th>#</th><th>Date</th><th>Parcelle</th><th>Source</th><th>Surface suspecte</th><th>Dominante</th><th></th></tr>`+
+d.map(a=>`<tr><td>${a.id}</td><td>${a.date.replace('T',' ')}</td><td>${a.parcelle}</td><td>${a.source}</td><td>${a.surface_suspecte} %</td><td>${a.classe_dominante}</td><td><a href="#" onclick="voir(${a.id});return false">voir</a></td></tr>`).join('')+'</table>':'Vide.';}
+function afficher(a){document.getElementById('res').innerHTML=`<div>Analyse #${a.id} — ${a.parcelle}</div>
+<div class="big">${a.surface_suspecte_pourcent ?? a.surface_suspecte} %</div><div>de surface suspecte</div>${barres(a.surfaces_pourcent||a.surfaces)}
+<p><img src="/analyses/${a.id}/carte.png?t=${Date.now()}"></p><p class="warn">Suspicion de symptôme, à confirmer par un technicien ou un agronome.</p>`;montrerGeo(a.id);}
+async function voir(id){const d=await (await fetch('/analyses?limite=500')).json();afficher(d.find(a=>a.id===id));}
+document.getElementById('f').onsubmit=async e=>{e.preventDefault();const fd=new FormData(e.target);
+['lat','lon'].forEach(k=>{if(!fd.get(k))fd.delete(k)});document.getElementById('res').textContent='Analyse en cours…';
+const r=await fetch('/analyse',{method:'POST',body:fd});const a=await r.json();
+if(!r.ok){document.getElementById('res').textContent='Erreur : '+(a.detail||r.status);return;}afficher(a);hist();};
+hist();setInterval(hist,10000);
+</script></body></html>
